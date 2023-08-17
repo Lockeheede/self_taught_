@@ -1,0 +1,1938 @@
+=>Multiplayer Action RPG<=
+
+*Introduction*
+->Make Testing Level ("Level_00")
+
+*Movement Input*
+Player_BP
+->InputAxisTurn->Add Controller Yaw Input
+->InputAxisLookUp->Add Controller Pitch Input
+->MoveForward->AddMovementInput
+->MoveRight->AddMovementInput
++Note:Don't forget to plug in Axis Value
+->Get Control Rotation->Break Rotator->From Z->Mak Rotator->Connect Zs
+->From Return Value->Get Forward Vector->Get Right Vector->Plug into Appropriate World Directions. 
+
+Anim_BP
+->Create Anim_BP of Player Skeletal Mesh (AnimBP_Player)
+->Set Player Animation Class
+->Open AnimBP_Player
+->From Try Get Pawn Owner->?IsValid
+->Check if Player is Falling and Speed
+->From ?IsValid->Sequence
++Copy Get Pawn Owner->Get Velocity->Vector Length->Promote to Variable ("Speed")
++From Pawn Owner->Get Movement Component->IsFalling->Promote ("Falling")
+->Open AnimGraph
+->Add New State Machine ("GroundLocomotion")-> open
+->Add State ("Idling") -> open
++We want different idles based on the weapon
++Making animations in iClone
++Create Blend Pose by Int
+#Put Base Idle in Blend Pose 0
+->Add new State ("Jogging") -> Add transition back to Idling
++Idling to Jogging = Speed > 1
++Jogging to Idling = Speed < 1 
+->Open Jogging state
++Plug in Jog Animation
+->Put GroundLocomotion into Output 
+
+*Sprinting For Multiplayer*
+->You have to go through the server and back to the client to do this. 
++Example: Check in the server if player has enough stamina
+->New Input ("Sprint")
+->Player_BP->Sprint
+->New Function (F_SprintSwitch) 
++Add Input ("SprintState")[Boolean]
+->Back in Event Graph->Get F_SprintSwitch
++When pressed, SprintState = true, released = false
+->Add Custom Event ("Server_ToggleSprint")->Details->Replicates = Run on Server; Reliable->Add Input ("State")[Boolean]->Get F_SprintSwitch->Plug it in
+->Open F_SprintSwitch->RgtClk Sprint State->Local Variable ("LocalSprint")
++Local Variables can only be used within the Scope
+->RgtClk->Switch Has Authority->From Remote->Call Server_ToggleSprint->Plug in LocalSprint into State->>
+->Get Local Sprint->Branch->From True->
++New Variables ("JogSpeed")[Float = 400] ("SprintSpeed")[Float = 700]
++Make Sure Max Walk Speed is default 400
++From True->Set Max Walk Speed = SprintSpeed, False->Set Max Walk Speed = JogSpeed
++Plug into Return Node
+->From Authority->Copy all from LocalSprint + Branch onwards (except Return Node) 
+
+->Open Anim_BP
+->AnimGraph->New State ("Sprinting") -> open
++Plug in Sprinting Animation 
+->Create an Interface
++An Interface allows you to communicate with any class that implements the Interface
++Any class that has it let's you communicate to those classes from other Blueprints 
+
+->In Blueprint Folder
+->New Folder ("Interfaces")
+->Need an Interface for every BP
+->RgtClk->Blueprints->Blueprint Interface ("INT_Anim_BP")
+->In the Anim_BP add the Interface (In Class Settings)
+->Make a function in the INT_Anim_BP ("SprintState") with a Boolean input of State
+->In Anim_BP->Event Sprint State->Promote to Variable (isSprinting)
+->In AnimGraph->GroundLocomotion->Transitions
++isSprinting is true and not true 
+->In Player_BP->New Var ("Sprinting")[Boolean]->Details: Replication: RepNotify
++This creates a new function (OnRep_Sprinting)
+->In F_SprintSwitch From Authority Max Walk Speed->Set OnRep_Sprinting
+->In OnRep_Sprinting->Get Sprinting->Branch->True->Get Mesh->Get Anim Instance->Srint State, State = True-> False SprintState, State = False
+
+*Dodging*
+->Download and Import GreyStoneRoll.FBX
+->Open the Animation
+->Put track on 0
+->Skeleton Tree->Root->Add Key->Drag track to end->Move the root forward a bit more->Add a new Key
+->Asset Details->Enable Root Motion
+->Create Animation Montage
+->In AnimGraph of Anim_BP->Add Default Slot->Details->Slot Name: FullBody
+->Inside of Montage->DefaultGroup->DefaultSlot->Slot->SlotName->FullBody
+->Details->Rate Scale = 1.4
+->In Anim_BP->AnimGraph->After FullBody Slot->Blend Poses By Bool->Promote to Variable ("IsRolling")
+->Disconnect GroundLocomotion->From GroundLocomotion->CachePose ("GroundLocoCache")->Then get GroundLocoCache and plug into False Pose
+->Copy GroundLocoCache->Copy FullBody Slot (Set to Upper Body) and plug those two in->Make a new Cache (UpperBodyCache)
+->Plug an UpperBodyCache Node into Slot FullBody
+
+->Go to INT_Anim_BP
+->New function ("RollingState")->Input ("State")[Boolean]
+->Event Rolling State->Promote to Variable ("isRolling")
+
+->Add Rolling Input
+->In Player_BP
+->Rolling->New Variable ("Rollng")[Boolean, Replicated]
+->Get Rolling->Not->Branch->
+->Custom Event ("Server_Rolling")[Run on Server, Reliable)
+->Set Rolling = True
+->From True->Server Rolling
+->Custom Event ("Multi_Rolling")[Multicast, Reliable]->Input->Anim Montage ("Montage")
+->From Set->Multi_Rolling [Montage = GreyStoneRoll]
+->From Multi_Rolling->Play Montage->Plug in Montage and send the skeletal mesh component pin into the multi_rolling
+->Drag the Set rolling into server rolling->Disconnect them and make a branch->From true set rolling, from false set rolling
+->On Multi_Rolling->From Play Montage On Completed->Server Rolling = False
+->From Multi_Rolling->Get Mesh->Get Anim Instance->Branch->True->Rolling State = True
+->False->Rolling State = False
+->From Multi_Rolling call set to True, from false set to false. 
+ 
+*Basic Attacking*
+->Setting up Player Abilities
++Heavy Attack and Light Attack
+#Note: Don't forget to comment your code. 
+->Create new Blueprint->Enum ("E_PlayerAttacks") open
++Enums give you different data to switch between
++Make one for LightAttack, HeavyAttack and Blocking
+->Open Player_BP
++New var ("Attacks")[E_PlayerAttacks]
+
+->Add Action Mappings
++Primary and Secondary for now
+
+->Back in Player_BP->Event Graph
+->Primary
+->Custom Event ("Server_TryToActivateAbility")
++Called try to make sure you CAN do an attack. Don't want to do it while doing other things
++New way to make an input for an event.
+#Set the Attacks node then drag the pin into the Custom Event
+
+->From Primary Pressed->Server_TryToActivateAbility
++Also do a Seconday 
+
+->When player presses the Primary, the Server will do some checks
+
+->Make a Replicated var ("CurrentlyAttacking")[Boolean]
++Get CurrentlyAttacking->Not and Rolling->Not
++Branch + And Nodes and connect the Nots
+->Drag from Attacks->Do a Switch on Enum
+->From LightAttack->Set CurrentlyAttacking = true->
+
+->Custom Event ("Multi_PlayMontage")[Multicast, Reliable]->Play Montage->Drag in pins for in SK Component, Montage to Play and Starting Section.
+
+->From the true->Multi_PlayMontage = Light Attack
+
+->New Custom Event ("Server_EndAttack")[Runs on Server, Reliable]
++Set CurrentlyAttacking = false;
++Call this from the end of Multi_PlayMontage Event
+
+->Open Anim_BP
+->From UpperBodyCache->Layer Blend Per Bone
++Details->Layer Set Up->Add 3
++Bone Names: pelvis; Blend Depth 4. thigh_r; -1, thigh_l; -1
++Turn on Mesh Space Rotation Blend
++Plug the Layered Blend Per Bone into FullBody Slot
++Put GroundLocoCache into Base, Upper into Blend 0
++Send FullBody into False
++And UpperBodyCache into True 
+->Get Speed-> == 0 ->And Boolean->Rolling is Not
++This will play the full animation when the player is not moving while attacking
+
+
+*How To Debug*
+->Example:
+->A projectile is overlapping a player but it doesn't damage them 
+->Press F9 to put a Break point on a Node
++When you get to that point the game stops
++If it doesn't stop then something is not registering
+->Add a Print String Node at certain places to check if something is working
+
+
+*Base Pickup Class*
+->Note: The guy doesn't let you attack with no weapons. But I want an Unarmed Attack
+->New BP Actor ("BP_BasePickup")
++All items will be a child of this
++Class Defaults: Details
+#Replication: Replcates and Replicate Movement = True
+#Disable Can Be Damaged and Start with Tick Enabled
++Components
+#Static Mesh ("Item") Make it Root
+`Child: Sphere Collision
+//Note: Set Sphere Radius = 80.0
+//Walking in this collision will give the option to pick it up
+`Select Item
+//Step Up On = No. Generate Overlap Events = False
+//Custom Presets
+///Ignore Everything, Block WorldStatic and WorldDynamic
+`Select Sphere
+//Custom Presets
+///Ignore everything, overlap Pawn
+
+->Event Graph
+->Event Begin Play->Get Item->Set Simulate Physics = True
+->Make a new Interface! 
+->In folder make new Blueprint->Interface ("INT_Pickup") -> open
++New function ("DisablePhysics")
+#When an item is equipped, disable physics
+->Set BP_BasePickup to have this Interface
+->In Event Graph 
++Call DisablePhysics->Copy Item + Set Simulate Physics = False->Set Collision Enabled -> Get Sphere and Item both as Target with No Collision 
+->Select Sphere
++Go to Details -> Events -> Begin Overlap
+->Switch Has Authority
+->From Other Actor->Actor Has Tag = "Player" -> Branch
++Tag is better on performance than casting
+
+->In Player_BP -> Class Defaults -> Search for tag -> Add element ("Player")
+->Comment Attacking Logic
+
+->Make a new Interface ("INT_PlayerCharacter") and add to Player_BP
++Function ("SetPickupInfo")
+->Event Graph -> Add Event SetPickupInfo
+->In BasePickup -> From Other Actor ->SetPickupInfo
+->New var ("PickupName")[Text]
++Plug in the var in BasePickup
++We also want a reference of the pickup so the BP_BasePickup can be sent to the Player_BP
++Get Self
++In INT_PlayerCharacter->New Input -> "PickupActor" [BP_BasePickup]
++Plug in Self in BasePickup's call of SetPickupInfo
+
+*Short Sword Pickup and Structures*
+->We actually want more information than just the PickupName. We might want details for the different items, like a two handed hammer vs a two handed sword, etc. 
+->To get a bunch of information for a single variable, we will need a struct 
+->Create a new Blueprint -> Structure ("S_PickupInfo")
++Be careful with structures. Saving, renaming and editing variables. Don't rename a structure when you start using it
+->Note: Add Collision to the Static Meshes and create Statics out of the Skeletal Meshes 
+
+->In BP_BasePickup
++Delete PickupName
++Create new var ("PickupInfo")[S_PickupInfo]
+
+->Open S_PickupInfo
++Variables
+#PickupName [Text]
+#PickupType [temporary Bool]
+#PickupImage [Texture 2D]
+#Damage [Float]
+#Armor [Float]
+#BlockValue [Float] 
+#Blendspace Int [Int] 
+`To update the animations based on the item
+
+->BP_BasePickup
+->Make first item 
+->Make Blueprint Child ("Pickup_ShortSword") -> open
++Mesh = Whichever sword
++Move Sphere to cover sword
++Class Defaults
+#PickupName: Short Sword
+#Damage: 20.0f
+
+->Player_BP
+->From Event Set PickUpInfo's Pickup Actor-> Promote to Variable ("OverlappedPickup")[Replicated]
++We only want this set when the player is colliding with the pickup
++In BP_BasePickup->Sphere->End Overlap->Switch Has Authority->Actor Has Tag = "Player"->Branch->Set Pick Up Info
+
+->INT_PlayerCharacter->SetPickupInfo->New Input -> "Overlapping" [Boolean] 
+->Set Overlapping to true in begin overlap and false in end
+
+->Player_BP
+->Branch in SetPickupInfo->Connect Overlapping->From True Set OverlappedPickup to PickupActor->From False Set OverlappedPickup to nothing
+
+->Setting Up UI
+->This is to show the player info. This only runs on the client. The server doesn't see the UI. We will use Client Events and Player Controllers
+
+->Open BP_PlayerController
+->Create Blueprint -> Interface ("INT_PlayerController")
++Add Interface to BP_PlayerController in Class Settings
+->Open Interface
++Function "ShowPickupName"
+#Input -> "Name" [Text]
+->Inside Controller
+->Event ShowPickupName
+->Custom Event ("Client_ShowPickupName") [Run On Owning Client, Reliable]
++Call it on ShowPickupName
+
+->Note: Test Below:
+->Player_BP
+->Get Controller->ShowPickupName->From OverlappedPickup->Get Pickup Info->Break S_PickupInfo->PickupName into Name
+->Controller->Print String 
+
+
+*Display Pickup Name on Player UI*
+->Content -> New Folder ("UI") -> RgtClk-> User Interface -> Widget Blueprint ("W_PlayerUI")
++Remember people get hired just to make UI. It is an extreme discipline
+->Add a Border ("PlayerMessageBorder") [Variable] to the Canvas Panel
++Anchor to the bottom-middle, Position X and Y = 0
++UI only exists on the client
++Alignment X and Y 4.0 
++Size to Content = On
++Alpha = 0
++Making it a Variable allows you to set Details of it in the Blueprint
+->Add Text to PlayerMessageBorder (Name: MessageText)[Variable](Text = "Message")
++Font Size = 30
++You can import fonts as well
+
+->Test Size
+->In BP_PlayerController -> From Begin Play -> Delay (0.2)->Get is Local Player Controller -> Branch -> True -> Create Widget = W_PlayerUI -> Promote to Variable ("PlayerUI")
++Most UI in PlayerController. Easier than in the Pawn
+->Add to View Port
+
+->On Text -> Outline Size = 3
+->On Border -> Set to Hidden
+
+->On W_PlayerUI
+->Graph->Custom Event ("PlayerMessage") -> Inputs : ("State")[Boolean] and ("Message")[Text]
++Add Branch from State -> True -> PlayerMessageBorder -> Set Visibility = Visible -> Get Message Text ->SetText -> Plug in Message = In Text
++False -> PlayerMessageBorder -> Set Visibility = Hidden 
+
+->On BP_PlayerController
+->Client_ShowPickupName -> Add Input -> ("Message")[Text] -> Compile
++Plug in Event ShowPickupName's Name into Client_ShowPickupName's Message
+->From the Event -> Get PlayerUI->Get PlayerMessage->Plug State into the Client and plug in everything else
+->Open INT_PlayerController->Inside Function ShowPickupName -> Add Input -> ("State" [Boolean] -> Then plug it into the Client_ShowPickupName
+
+->Back in Player_BP
+->From True->Set ShowPickupName's State = True 
+->On False set to False 
++Target on both is Get Controller
+
+*Pickup Logic*
+->Pick up the item when overlapping
+->In BP_Player
++Comment out Set The Pickup Name to Player When Overlapping
+
+->New Action Input -> Interact
+->In Event Graph -> Interact 
+->We are going to want a new Base Class that goes above BP_BasePickup
++Move BP_BasePickup to the Pickups Folder
+->Create new BP Actor ("BP_Interactable") -> open
+->Open BP_BasePickup and in Class Settings -> Details -> Class Options -> Parent Class = BP_Interactable
+-> Create Blueprint -> Enum ("E_InteractType") -> Open
++Pickups
++Doors
++Chests
+-> In BP_Interactable -> New Var ("InteractType")[E_InteractType]
+-> In BP_BasePickup -> Set InteractType = Pickups
+
+->Create Interface ("INT_Interactable") -> Add to the BP_Interactable 
++New function ("GetInteractType") 
+#First to use output InteractType [E_InteractType]
+`Outputs can't be implemented in an event graph, but you can see in My Blueprint under Interfaces the blue Get Interact Type -> Open it and plug in the InteractType variable
+
+->Back in Player_BP
+->Custom Event ("Server_InteractWithObject") [Run on Server, Reliable]
++We want the server to handle picking up and inventory. 
++Plug in a function call into the Interact Pressed 
+->Get OverlappedPickup -> Convert to Validated Get
++We only want to continue once it has been set. 
+->Custom Event ("HandlePickup")
+
+->Create an Enum ("E_PickupTypes") -> Open
++Weapon
++Consumable
++Armor 
+
+->When editing a struct be careful. Save All your project. Then close all your classes
+->Open S_PickupInfo -> Change PickupType to [E_PickupTypes] and Save 
++Close the project but don't save anything else and re-open
+
+->Open Player_BP and BP_BasePickup and INT_Pickup
+->New function in INT_Pickup ("GetPickupType")
++Output ("PickupType") [E_PickupTypes]
+->Close all Interactable tabs
+->In BP_BasePickup -> Open GetPickupType in Interfaces
++Get PickupInfo->Break it and plug in PickupType
+->In Player_BP->Get OverlappedPickup ->Get Pickup Type Message->Switch on E_Pickup Types
+->From IsValid -> HandlePickup
+
+*Equipping Weapon*
+->In Player_BP -> New Function (f_EquipWeapon)[Category=Server]
++Doesn't actually run on server. For organization
+->From Switch on E_PickupTypes -> Weapon -> f_EquipWeapon  
++New variable ("EquippedWeapon") [Actor, RepNotify]
+#RepNotify is like a Multicast
+`It is cast to any players that are relavent (Close enough)
+`A RepNotify creates a function (OnRep_EquippedWeapon)
+->Before running the function -> Validated Get EquippedWeapon -> Plug in Is Not Valid to the function
+->Inside f_EquipWeapon
+->new Struct ("S_EquippedItems")
++EquippedWeapon [Boolean]
++EquippedArmor [Boolean]
+->Back in BP_Player
+->New var ("EquippedItems")[S_EquippedItems][Replicated]
+->Get Equipped Items->Break->Not->Branch->Connect EquippedWeapon->True-> Set EquippedWeapon
+->And plug it into the start of the function
+->In Player_BP -> OverlappedPickup into EquippedWeapon 
+
+->Open OnRep_EquippedWeapon->Get Mesh->AttachActorToComponent->Target = EquippedWeapon
++SocketName: (Should probably do on the strap based on which weapon or armor it is)
+#So here we should get the type of weapon it is so we can put swords on the back and daggers on the side. 
++Location and Rotation Rule = Snap to Target
+
+->On f_EquipWeapon -> After Set EquippedWeapon -> DisablePhysics
+->Get EquippedItems -> Set Members -> In Details click on EquippedWeapon -> Then turn it to true. 
+
+=>Note:Error by Creator
+->In BP_Interactable -> Delete the Scene Root Component and Add a Static Mesh
+->In BP_BasePickup -> Put the Sphere on Static Mesh to get it out of Item, and delete item.
++Put the StaticMesh into the Pickup Events
+->Inside the Pickup_ShortSword -> Click the StaticMesh and read the Sword
++In the BP_BasePickup don't forget to re-set collisions
+->Open f_EquipWeapon->Delete Disable Physics Node
+->Open OnRep_EquippedWeapon -> Call DisablePhysics and connect EquippedWeapon to Target
+
+->Test on Client
+
+
+*Equipping Shield*
+
+->RgtClk BP_BasePickup -> Create Child -> Pickup_Shield
++Add its Static Mesh
++Put the Actor into the world
++Make sure to set its PickupType to Shield in its Details
+->Open the Mesh
++Remove the Simple Collision 
++Go to Convex Decomposition and Apply it
+->Open BP_Player
++Duplicate EquippedWeapon var ("EquippedShield")
+#Set RepNotify to None and back to RepNotify 
+`That way it will create the function
+->Get EquippedShield -> Make Validated Get
+->New Function F_EquipShield [Category = Server]
+->Copy the first 3 parts and the branch in F_EquipWeapon
+->Paste in F_EquipShield -> Change the Condition to EquippedShield -> Set EquippedShield
+->From Event Graph->From Is Not Valid -> Call F_EquipShield
+->Copy the AttachActorToComponent Node from OnRep_EquippedWeapon 
++Change the Socket for the right hand, change Target = EquippedShield
+->From F_EquipShield -> DisablePhysics -> Get EquippedItems -> Set Members -> Turn on Equiped Shield
+->The object doesn't look the same in idle and walking
+->In the animation -> Add new socket to lower arm ("Shield")
+
+*Equipping Helmet/Armor*
+->Set up Collision on Helmet
+->Convex Collision
+->Create a Child from BP_BasePickup -> Pickup_Helmet -> open
++Mesh = Helmet
++Class Defaults -> Pickup Type -> Helmet
+->BP_Player -> Duplicate from EquippedShield ("EquippedHelmet") [Set replication to none than back to RepNotify]
+->From Switch to PickupType -> Get EquippedHelmet -> Convert to Validated Get
+->New function ("F_EquipHelmet") -> Open
+->Get Equipped Items -> Break -> Not -> Branch 
+->True -> Set EquippedHelmet -> Plug into beginning of Function
+->Back in Event Graph
++Plug in Is Not Valid into F_EquipHelmet
+->In Function -> Set members -> turn on Helmet
+->In OnRep_EquippedHelmet function -> Copy from OnRep_EquippedShield -> Change EquippedShield to EquippedHelmet and change the socket name 
+->DisablePhysics Message
+
+->Project Settings
++Engine -> Collision -> New Object Channel ("Pickups") Apply -> BP_BasePickup -> Refresh -> Change Collision Object Type = Pickups -> Ignore Pickups
+->In BP_Player-> Ignore Pickups 
+
+*Applying Damage With Anim Notify State *
+->We want a LightAttack and HeavyAttack
++And we might make a Stamina System as well
++So the player cannot spam the attacks 
+
+->Option to damage other players
+
+->BP_Player
+->Comment Picking Up Objects
+->The Montage we play through the attack will do the damage
++We will do it through an Anim Notify
++Open Montage->RgtClk->Add Notify State->Montage Notify Window (or we can make out own) 
+#We will make our own 
+->RgtClk BP Class -> Search for AnimNotifyState ("ANS_LightAttack")
++Functions -> Override -> GetNotifyName -> Return Value = LightAttack
+->Then back in the Montage -> Add Notify State -> ANS_LightAttack
+->Override another function -> Received Notify Begin
++We are going to put a sphere on the weapon that checks if any damagable things overlap the sphere
++You don't want the sword mesh to do this (in case of smaller enemies, etc.)
+#And also some animations move quickly, which won't register the mesh 
+#Collision is inaccurate at high speeds
+->From Mesh Component -> Get Owner
++From BP_Player -> Open INT_PlayerCharacter -> New function ("LightAttack")
+#Call the Light Attack in The BP_Player
+->From Notify Begin->Get Owner -> Call Light Attack and Connect it
+->We don't want it on the server and client 
+->In BP_Player->From the Light Attack Event-> Switch has Authority -> From Authority->SphereOverlapActors (Radius = 80) -> GetActorLocation -> Get Actor Forward Vector
++ * ForwardVector by float (130.0) and Add the two vectors->Post into Sphere Position
+->From Object Type -> Make Array (Pawn) -> Actors to Ignore -> Make Array (Self) 
+->Actor Class Filter -> BP_CharacterBase (In this case: BP_ThirdPersonCharacter)
++Because we are going to be doing this on Characters??
+#But what about things like pots and boxes?? 
+
+->To Test: 
+->Draw Debug Sphere (Radius = 80) Duration = 5, Thickness = 1, Plug in vector for position.
+->Run on Listen Server while testing 
+
+->Continue
+->Branch from Return Value->From Out Actors -> For Each Loop -> Array Element -> Apply Damage (But we are going to use tags so we don't damage other players.) -> Connect -> Base Damage comes from the item 
++Change EquippedWeapon to a BP_BasePickup Type instead of Actor
++That goes for all Pickups (Dagger, Armor, Swords, etc). 
++And on the inputs for Functions 
+
+->Get EquippedWeapon->PickupInfo->Damage = Into Base Damage
+->Damage Causer = Self
+->Damage Type Class = Damage Type Class 
+
+->Get Event AnyDamage->Print String = Damage
+For Now
+
+->Test Play as a Client (Put a Character in the game to make sure it prints the damage)
+
+->Note: Need to test through the sword to see what I need to change for daggers, etc 
+
+
+*Player Stats and Reducing HP*
+->We are going to set damage and stats through a struct
+->New struct -> S_PlayerStats -> open
++These are mostly going to be floats
+#CurrentHealth, MaxHealth, CurrentStamina, MaxStamina, CurrentSkill, MaxSkill, ArmorRating, DamageRating, ExperiencePoints [This one is an Int]
+
+->In BP_Player
+->New var ("PlayerStats")[S_PlayerStats, Replicated]
+->Equipped Stuff -> Category = Inventory 
++Swords, Daggers, Armor
+
+->Set Default Values
+CurrentHealth = 300, MaxHealth = 300, CurrentStamina and MaxStamina = 200, CurrentSkill and MaxSkill = 100 
++To Test
+
+->From Event AnyDamage->Get Controller->Get PlayerStats->Break->CurrentHealth - Damage->From PlayerStats->Set Members->Turn on CurrentHealth and plug in result
+
+->To Test:
+->From Set Members->Struct Out->Break->Current Health into Print String 
+
+->Remove Print String->CurrentHealth <= 0 -> Branch
+
+->Open BP_ThirdPersonCharacter
+->CustomEvent ("Death") [Run on Server, Reliable]
++We want this in BaseCharacter because AI will need Death as well
+
+->In BP_Player->Event Death (This overrides it) -> From True -> Call Death
+->If you want: Right Click Event -> Add Call to Parent
++We aren't doing that right now 
+->Open PlayerController and INT_PlayerController->New function ("UpdateHealthUI") [input "NewHealth" = float]
+->In BP_PlayerController->Event Update Health UI
+->Custom Event ("Client_UpdateHealthUI")[Run on owning client, reliable]  -> Input -> "Health" [float]
++Call Client_UpdateHealthUI from Event Update Health UI
+
+
+*Player Health Bar UI*
+->Open Player_UI -> Add Border to Canvas Panel ("StatsBorder") [variable] [Brush Tint, Alpha = 0] Size X = 500
+->Add to it a Vertical Progress Bar ("HealthBar")
++Style Tint (DarkGrey) 0%
++Fill Color and Opacity (Red) 100% 
++Transform Y = 1.5
+->Event Graph 
++Custom Event ("UpdateHealthBar") -> Input -> "HealthPercent" [Float] -> Get HealthBar ->Set Percent
+
+->BP_Player
+->Get Controller->Update Health UI before the branch and after add members
++New Health = CurrentHealth / MaxHealth
+
+->BP_PlayerController
+->From Client_UpdateHealthUI -> Get PlayerUI -> UpdateHealthBar -> Plug in Health to Health Percent
+->Calculating percentage on the server 
+
+*Player Death and Freezing Movement*
+->BP_Player
+->From Event Death 
+->New Variable ("PlayerDead") [Boolean, RepNotify]
+->Branch -> PlayerDead-> Not -> Set PlayerDead = True
+->OnRep_PlayerDead -> PlayerDead -> Branch -> From True->
+->Get Death Animation->Play Animation = Death 
+->In Event Graph->From movement -> Create new var ("CanMove") [Boolean, Replicated] 
+
+->Open INT_PlayerCharacter
+->New function ("UpdateMovement") -> Output -> "Return" [Boolean] -> Open
+->Add Input -> ("CanMove") [Boolean]
+->Go to BP_Player->And open the Interface function UpdateMovement
+->Set CanMove and plug into return
+
+->BP_Player->Event Possessed->UpdateMovement->CanMove = true
++EventPossessed only gets called from the Server. 
++Don't use Begin play here because it can run on Client as well. 
+->From Event Dead->After Set PlayerDead->UpdateMovement -> CanMove = false
+
+*Player Death Screen*
+->New Widget Interface ("W_DeathScreen")
++Add Canvas Panel -> Add Border ("DeathBorder") [Variable]
+#Make the Anchor the whole box and set all offsets to 0
+#Appearance-> Tint RGB (0,0,0) -> BrushColor Alpha = 0
+->Add Text to Border (Text = "GAME OVER")
++Horizontal and Vertical Alignment = Center
++Size = 90, Color = Dark Read
+
+->Add Animation ("BackgroundFadeAnim")
++The square in the details next to values is a keyframe
++Select DeathBorder -> BrushColor Alpha = 0 -> Add keyframe
++Move animation to 5 seconds -> Alpha = 1 -> Add keyframe
++Text -> Render Transform -> Scale X, Y (0,0) -> Add keyframe
++After 5 seconds Scale X, Y (1, 1) -> Add keyframe
+
+->Graph -> Event Construct -> Get BackgroundFadeAnim -> Play Animation
+
+->Do this in the BP_PlayerController (Remember it handles widgets)
+->Open INT_PlayerController -> Add function ("DeathScreenUI")
+
+->Event DeathScreenUI -> 
+->Custom Event ("Client_CreateDeathScreen") [Run on Owning Client, Reliable] -> Remove All Widgets -> Create Widgether (W_DeathScreen)->Add to Viewport
+->Connect DeathScreenUI
+
+->On BP_Player->OnRep_PlayerDead end ->Get Capsule Component-> Set Collision Profile Name = Ragdoll)
+
+=>First AI Enemy<=
+
+*Base AI Class and Setup*
+->From BP_ThirdPersonCharacter -> Create Child ("BP_EnemyBase")
+->Make new folder ("AI")
+->Make a folder for each enemy
++("Soldier")
+->From BP_EnemyBase -> Create Child ("BP_BaseSoldier")
+->New BP -> Search for DetourCrowdAIController ("EnemyAI_Controller")
++Set this in the BP_EnemyBase's Pawn, AI Controller Class
++Disable Tick
++Turn off Use Controller Rotation Yaw
++Auto Posses AI = Place in World or Spawned
+->Tags = "Enemy"
+->Open BP_BaseSoldier
++Add Mesh->Rotate, Adjust Capsule 
+#Note: Make Capsule wider than enemy
+->Put the enemy in the level
+
+->Add a Nav Mesh Bounds Volume
++Increase it to cover the area. Press P to see visual of bounds. 
+#You don't want a bound around a large open world
+`You would rather use a navigation envoker
+
+->Create AnimBP -> AnimBP_BaseSoldier -> Open
++From update animation-> ?IsValid -> Sequence ->
++Try Get Pawn Owner->Get Velocity->VectorLength->Promote ("Speed")
+
+->BP_Enemy Base Details: 
+->CharacterMovement:
+->Set Max Walk Speed = 120
+->Walkable Floor Angle = 70
+->Rotation Rate Z = 270
+->Orient Rotation to Movement = True
+->Turn on RVOAvoidance
++Consideration Radius = 200
+
+->Capsule Component:
+->Collision
+->Presets = Custom, Ignore Camera
+
+->Mesh
+->Collision
+->Presets = Pawn -> Ignore All
+
+->Back in AnimBP_BaseSoldier
+->From Velocity->Calculate Direction
+->From Try Get Pawn Owner->GetActorRotation->Plug into Calculate Direction's Base Rotation->Promote ("Direction")
+->Compile and Save
+
+->AnimGraph 
+->Add New State Machine ("Locomotion")->DefaultSlot->Plug into Output Pose
+->Open Locomotion -> New State ("Idle/Moving")
+->Create a Blend Space from the BaseSoldier Skeletal Mesh ("BS_BaseSoldier") -> open
+->Axis Settings
++Horizontal = Direction, Minimum = -180, Maximum = 180
++Vertical = Speed, -90, 360, Grid Divisons = 5 
+#Add walking, idle and walking backward at direction 0, speed = 90 to 360, 0, and -90
+#Add Walk Left and Walk Right to Strafe
+->Open Idle/Moving
++Add Blendspace with Direction and Speed variables plugged in
+
+->Plug in AnimBP into the BP_BaseSoldier details
+
+*AI Roaming*
+->New Interface -> INT_EnemyAI 
++All functions for AI will be in this Interface
++CustomEvents won't even be in the Server, unless the Player is running something from the AI 
++New function ("SetRoaming") 
+
+->BP_EnemyBase -> Add INT_EnemyAI
+->Event SetRoaming 
+
+->New Enum ("E_AIMovementState") -> open 
++Idle
++Walking
++Running
+
+->Back in BP_EnemyBase
+->New function ("F_MovementState") -> Input -> "State" ["E_AIMovementState"] 
+->Get CharacterMovement -> Set Max Walk Speed ->
+->From State -> Select
+->New Variable ("WalkSpeed") [Float] [90.0]
+->Plug into Walking
+->Promote Running ("SpeedMultiplier") [2.0]
++This way you can set the multiplier in the BP_BaseSoldier 
+#Class Defaults -> SpeedMultiplier = 4.0
+
+->On begin play call F_MovementState
++This will be for walking around
+->Delay (1.0) -> Set Roaming 
+
+->From Event SetRoaming
+->New Boolean ("IsRoaming") -> Not ->Branch -> AIMoveTo, Pawn = Self, Destination -> GetRandomReachablePointInRadius, Radius = 1000
+
+->From BeginPlay
+->Before Ddelay
+->GetActorLocation ->Promote ("StartingLocation") 
+
+->From SetRoaming -> Origin -> Plug in StartingLocation
+->Set isRoaming = true
+->OnSuccess->isRoaming = False->Delay (5.0)->Call SetRoaming
+
+*AI Detect and Chase Player*
+->Go to EnemyAI_Controller
+->Add Component Pawn Sensing
++Sight Radius: 1500
++Sensing Interval: 
++Evemts -> Click OnSeePawn
+->New Variable ("Target") [Actor]
+->Validated Get Target -> If Not Valid -> Set Target -> Plug in Pawn
+->Test
+->Print String: Player Target Set
+
+->INT_EnemyAI
+->New Function ("SetPlayerTarget") -> Input -> Target [Actor]
+
+->BP_EnemyBase
+->Event Set Player Target-> Promote ("PlayerTarget") 
+
+->Back in AIController
+->Get Controlled Pawn -> Set PlayerTarget from INT_EnemyAI -> Plug in from Set Target into Target
+
+->BP_EnemyBase
+->New Var ("isCombat") -> Set to True after Set PlayerTarget
+
+->In Event SetRoaming's beginning -> Get isCombat -> Not -> And with isRoaming Not
+->From isCombat = True -> Set Actor Tick Enabled = True 
+->Call Event Tick -> Get isCombat -> Branch -> From True -> Validated Get of PlayerTarget 
+->From isValid -> SetActorRotation, Self->GetActorLocation + PlayerTarget->Get ActorLocaton -> Find Look at Rotation -> Split Pin -> Plug in Z
+
+->After Set Actor Tick Enabled->GetActorLocation -> Promote ("StartCombatLocation") 
++This is like an Anchor. Whenever the enemy aggros and the player runs away, the enemy knows to run back to this location 
+-> Get F_MovementState = Running
+
+->New interface function ("ChasePlayer")
+
+->Get Event ChasePlayer->Get isCombat->Branch -> From True -> AI MoveTo, Self, Target Actor = PlayerTarget, Acceptance Radius = 50, Stop of Overlap = True 
+->Plug in ChasePlayer from interface after F_MovementState in the Event SetPlayerTarget 
+
+->Also in the actual F_MovementState function-> WalkSpeed * SpeedMultiplier plug into Running 
+
+->Interface function ("RunAttackChoices")
+
+->Event RunAttackChoices 
+
+*AI Taunting on Aggro*
+->Interface function ("CheckForTaunt")
++To do a taunt if not close to player
+
+->From F_Movement State, remove Chase player and replace with CheckForTaunt from Event 
+->In Event CheckForTaunt
+->Get Controller->Stop Movement->Get Self->Get Distance To -> Other Actor = Player Target -> >= (800) ->Promote ("DistanceFromPlayer") -> False = ChasePlayer
+
+->Custom Event ("Multi_PlayMontage") [Multicast, Reliable]
+->Play Montage -> Plug in Skeletal Mesh, Montage to Play, and Starting Section into Event 
+
+->Back to CheckForTaunt 
+->From True -> Multi_PlayMontage 
++Make animation for taunt and make it a montage
+->In Montage->Promote to Variable ("TauntMontage") 
+->In BP_BaseSoldier->Set the TauntMontage->Change Multiplier = 2 
+->Then after Multi_PlayMontage->From the TauntMontage ->Get Play Length->Return Vaue = Delay->Chase Player 
+
+->Set these variables to private:
++StartingLocation
++StartCombatLocation
++isRoaming 
++isCombat
+
+*Inital AI Attacking Setup*
+->Organize original BP_EnemyBase Code
++Comment out things like Begin Start Location, Chasing Player, Aggro Player, Roaming
+->From Run Attack Choices->Validated Get PlayerTarget 
+->In INT -> New function ("ClearTarget")
+->From NotValid->ClearTarget
+->From Roaming's AIMoveTo's Fail -> ClearTarget
+
+->In BP_Player -> INT_PlayerCharacter -> new function ("IsDead") -> Return Bool "Dead"
+->Open IsDead->Plug in PlayerDead
+
+->In BP_EnemyBase->From PlayerTarget->Get IsDead->Not->Branch->False: ClearTarget
+->Make a function that will randomize attacks and the AI will choose which attack to do
++For now, making one attack
++Function ("F_PickAttack") -> Input -> DistanceToPlayer [float]
+->From True->F_PickAttack->Connect the original Get Distance operation and plug it in
+
+->Back in F_PickAttack
+->From DistanceToPlayer <= new var ("MeleeDistance")[Float] -> Branch
++Note put these in EnemyInfo Category:
+#WalkSpeed
+#SpeedMultiplier
+#MeleeDistance
+#TauntMontage
+
+->Open BP_BaseSoldier -> MeleeDistance = 150
+->Get the Attack Animation and make Montage ("BaseSoldier_LightAttack")
++Make two animations and two montages for attacks 
++Open the Montage
+
+
+->EnemyBase->Add a Sphere Collision ("MeleeSphere") -> Child of Mesh
++Collision -> Step Up On = No. Custom Preset, Ignore everything, Overlap Pawn
++Increase radius (135) and place it in front of the Mesh 
+ 
+->In AI Folder->New Class [AnimNotifyState]("ANS_MeleeAttack") -> open
+->Override Name ("MeleeAttack") Override Begin-> From Mesh Comp -> Get Owner
+->INT_EnemyAI -> new function ("SetMeleeCollision") -> Input -> State [Bool]
+
+->BP_EnemyBase -> Call Event SetMeleeCollision -> From State -> Branch -> From True -> Get MeleeSphere -> Set Collision Enabled -> Query Only 
++Note on MeleeSphere, set Collision Enabled in Details to No Collision
+->From False set Collision to No Collision
+
+->From ANS_MeleeAttack -> Begin -> From GetOwner -> SetMeleeCollision State = True -> Plug into Return 
+->Override End -> Copy from begin but make State = False 
+
+->In Montage, based on where the attack connects
+->Add Notify State -> MeleeAttack 
+
+*Finishing Light Attack*
+->New var ("LightAttackMontages") [Anim Montage. Array] Category = EnemyInfo
++For BP_BaseSoldier plug in AttackA and AttackB 
+
+->Open F_PickAttack
+->From True -> Multi_PlayMontage -> Get LightAttackMontages -> GetCopy -> From int -> Random Integer in Range. From LightAttackMontages->Get Length-> - 1 -> Plug into Max
+->Collapse all that into a Function ("F_GetMontage", Access Specifier = Pure) -> Open
+->We want to use this for multiple montages, not just light attack, so: 
+->Set LightAttackMontages and plug it into the function to get an input, then delete that set node -> Compile
+->Hold Ctrl and drag the pins from LightAttackMontages into the input, delete the Get LightAttackMontages node -> Compile  
+->Then back in F_PickAttack -> Plug in a LightAttackMontages into the function that has an error and on its input, rename to "Montage" 
+->On the F_PickAttack -> Output -> Length [Float] 
++We can't put delays in functions
+->From that pure function -> Get Play Length ->Plug into the output
+
+->In EventGraph -> In the taunt, disconnect the taunt 
+->Change TauntMontage to an Array 
+->Get F_GetMontage and plug it into Montage to Play and GetPlayLength 
+->From F Pick Attack in Event -> From Length -> + 0.5 -> Delay -> ChasePlayer
+
+->BP_BaseSoldier add the original Taunt into the TauntMontage Array
+->Test to make sure the enemy chases and attacks
+
+*Damage Player*
+->In BP_EnemyBase -> MeleeSphere -> Begin Overlap -> Other Actor -> ActorHasTag -> Switch Has Authority -> Branch -> True : Apply Damage
++We'll need to do an enum for calculating different types of damage
+->New enum ("E_AIAttackTypes")
++Light
++Heavy
++Range
++Special 
+->Add new variable AttackTypes [E_AIAttackTypes, Single, Private]
+->In F_PickAttack function -> Set AttackTypes = Light and plug it into Multi_PlayMontage
+
+->New function ("F_GetDamage") -> Output -> Damage [Float] -> Input -> Attack [E_AIAttackTypes] -> Plug in AttackTypes var 
+After the Begin Overlap True -> F_GetDamage
+->Plug Damage into BaseDamage-> Damage Type = DamageType -> DamageCauser = Self 
+
+->Open F_GetDamage -> From Attack -> Switch on E_AIAttackTypes -> From Light plug into Return Node -> Promote ("LightAttackDamage") [Category = EnemyInfo] 
+->In BP_BaseSoldier, LightAttackDamage = 35
+
+*HeavyAttack And Knockback*
+->Add the animation and make a montage
+->We want to knockback the player if they are hit by the attack
++We will make a new special animation notify
+->In AI Folder. Duplicate ANS_MeleeAttack ("ANS_OverlapSphere") -> open
+->Open INT_EnemyAI -> new function ("DoSphereOverlap")
+->Back in ANS_OverlapSphere ->Delete the other function and choose DoSphereOverlap
++Delete End point.
++Name = "Overlap Sphere"
+->On heavy attack montage -> Add AnimMontage State (Overlap Sphere)
+
+->In BP_EnemyBase
+->Event DoSphereOverlap->Switch Has Authority->Get Actor Location + (GetActorForwardVector * [float = 200]) ->SphereOverlapActors, radius = 100->From Object Type -> Make Array = Pawn, Ignore = Make Array = Self
+->From Out -> ForEach -> Array Element = ActorHasTag ("Player") -> Branch 
+->Duplicate the logic from F_GetDamage and Apply Damage 
++Damage Actor = ArrayElement from foreach loop
+
+->Open F_PickAttack
+->Duplicate everything from LightAttack enum onward
+->Make new function ("F_Percentage")[pure] -> Input -> Percent [float] 
+->Get Random Float in Range (0.0, 100) -> <= -> Into (False) Select -> Output -> Return [Bool] 
+->From Percent -> == 0.0 -> Index of Select 
+
+->Back in F_PickAttack
+->You can manually select how often an enemy does a light or heavy attack
+->Get F_Percentage = 70.0 -> Branch -> True = Light -> False = Heavy 
+
+->From SphereOverlapActors->Draw Debug Sphere, with the "+" into center, Radius = 100, duration 2, thickness 1.0
+
+->Duplicate var LightAttackMontages ("HeavyAttackMontages") LightAttackDamage ("HeavyAttackDamage") 
+->Open BP_BaseSoldier -> Add in the HeavyAttack Montage -> Damage = 60.0
+->And in the F_PickAttack and F_GetDamage plug in the HeavyAttackMontages and HeavyAttackDamage in the proper place. 
+
+->To test, plug right into heavy
+
+->F_GetDamage -> Duplicate Return Node -> Plug in HeavyAttackDamage
+->New input -> HitPlayer [Actor] ->Plug in Other Actor from EventGraph
+
+->Cut ApplyDamage from the Event and put it into F_GetDamage, replacing the return nodes. 
+->Also Delete Attack from the Input and plug in the var of AttackTypes into Selection
+
+->Copy all of the Event Graph's DoSphereOverlap into the BaseSoldier 
+->From Array Element -> Cast To Character [pure] -> Launch Character -> GetActorLocation -> From Character -> GetActorLocation-> Get Unit Direction (Vector) -> Break -> X,Y Make -> Z + 1 -> Retrun * float (900)
+
+*ChargeAttack & Knockback*
+->Note: in BS_BaseSoldier -> Sample Interpolation -> Set Target Weight Interpolation = 4.0
++This smooths out movements a bit better
+->On BP_BaseEnemy -> EventGraph -> ChasePlayer -> on Fail -> Print String = Failed to Move Towards Player, Clearing Target. 5.0, Red -> ClearTarget from INT_EnemyAI
++We'll set up Clear Target later.
+
+->Set up animation from charge attack -> Make montage. 
++In Montage use ANS_OverlapSphere again
+
+->Go to F_PickAttack -> set up Light and Heavy
+->On MeleeDistance -> False -> Set Attack Types (Special)
+->Copy all the info for Heavy Attack
++Duplicate HeavyAttackMontages ("SpecialAttackMontages")
++Create one array slot and plug in the attack montage
++Create a SpecialAttackDamage var [float] 
+#In the BP_BaseSoldier make it = 90
+
+->In the Event DoSphereOverlap we need an attack type enum to switch between heavy and special 
++Notice we can't get E_AttackTypes var, it is private. 
+#Remember from Data Structures, you can access private members with public functions
+->Make a new function in BP_BaseEnemy ("F_GetAttackType")
++Get the AttackTypes var and drag a pin into the return node. 
++Set to pure cast
+
+->In BP_BaseSoldier->Get F_GetAttackType -> Switch -> Plug in Has Authority -> Plug in the Heavy Attack (and comment it in)
+->The special is basically the same except the location and size of the sphere radius
++Duplicate the heavy and call it Charge Attack 
++Test by setting it to Offline 
+->Override the ChasePlayer Logic BP_BaseSoldier
++In EnemyBase
+->Set GetAttack Category to GetVariables
+->New function ("F_GetCombatState") -> Return -> Drag in InCombat and plug it in -> pure. Category = GetVariables
+->New function ("F_GetPlayerTarget") -> Return  -> Drag in PlayerTarget and plug it in. Category = GetVariables, pure case. 
+
+->In BP_BaseSoldier -> F_GetCombatState and F_GetPlayerTarget and plug them into their spots
+->Then in its ChasePlayer -> Copy Distance to and pick attack and delay from BP_BaseEnemy's EventGraph -> Plug it into True
+
+->In BP_BaseEnemy -> F_GetDamage -> Duplicate and do SpecialAttackDamage
+
+*Enemy Projectile*
+->Going to make a projectile for when the player is outside of the charge range
+->Copy the Apply Damage from F_GetDamage 
++Duplicate and make a RangedAttackDamage and plug it in
+->In F_PickAttack->From the Melee Distance Branch->False, make another Branch -> Make another <= -> Plug in DistanceToPlayer -> Promote the bottom float to a var ("RangedDistance") -> Move the variable above the Melee Distance
++Set RangedDistance = 500
+->From True put in the charge, and anything greater will be the new RangedAttack 
+->Duplicate the Special Attack logic and change to Range
+->Make a RangedAttackMontages array and plug it in.
+
+->Create the animation for the Ranged Attack
++We will probably need to make a new enemy type (BP_BaseRogueThief)
+#And give him some animations to use. 
+#Since the projectile that the Troll in the example is using is vomit that explodes. We can make the BP_BaseRogueThief throw bombs
++Make the montage 
+->Go to AI Folder -> Duplicate ANS_MeleeAttack ("ANS_RangedAttack") 
++Name = RangedAttack 
++Begin -> Delete the function
+->Open INT_EnemyAI -> new function ("DoRangedAttack")'
+->In BP_EnemyBase->new event DoRangedAttack 
+->Then back in ANS_RangedAttack -> Get the DoRangedAttack message
+->Delete the notify end
+->In montage -> Add the NotifyState for ANS_RangedAttack
+
+->We need to set up the projectile
+->Create new BP Actor (BP_AIProjectile) [Replicated = True, Tick = False]
+->Inital Life Span (for now) = 3.0
++You can also set the life span in EventGraph
+->Add Sphere Component -> Collision -> Custom -> Ignore all, Overlap Pawn, WorldStatic, WorldDynamic
+->Open Project Settings -> Engine -> Collision -> Object Channels -> Add New ("Projectile", Overlap)
+->Back in BP_AIProjectile -> File -> Refresh 
+->Change object type to Projectile in Collision
+
+->Select Sphere and Begin Overlap -> Switch Has Authority -> Actory Has Tag ("Player") from other actor -> Branch -> Apply Damage from Other Actor -> Base Damage, Promote ("Damage") -> Damage Causer = Get Owner -> Damage Type Class = DamageType -> 
+
+->Add a Particle System Component 
+->Get a particle system from FX Variety Pack from the Marketplace Permanately Free 
+->Get the Water Ball and rename (in example "P_Vomit_Projectile") -> Open
++Core -> Scale Color Life -> Change the colors and values (almost emissive)
+
+->Back in BP_AIProjectile -> Add ProjectileMovement Component
+
+->Make a Child ("BP_ProjectileVomit) -> open
+->Plug in the Particle System
+
+->ProjectileMovement -> Projectile -> Initial Speed = 3500, Gravity = False
+
+->We want this to explode when it hits things
+->Back in EventGraph of BP_AIProjectile 
+->Custom Event ("Multi_SpawnFX") [Multicast]
+
+->Make Event Destroyed -> Then plug in the event call of Multi_SpawnFX 
+->At the end of the Overlap -> Destroy Actor 
++We only want it to happen when it hits something. 
++New var ("Hit?") [Boolean] -> Plug into True and set to True 
+->On the Event Destroyed -> Get Hit? -> Branch and plug in the Multi_SpawnFX to True 
+
+->Note: this will not work on a wall. 
++Example: If we put in a cube and set it up as a wall, the projectile goes right through. 
+#Test by putting the BP_ProjectileVomit in the game
+->When putting in meshes make sure they Generate Overlap Events = true, and the collision presets = BlockAll 
+->Duplicate Actor Has Tag -> Make Tag = "Enemy" -> Branch -> From False -> Set Hit = True -> Destroy Actor 
++This will ignore enemies but make other actors like walls cause it to explode. 
++You have the option to make enemy attacks hit each other by plugging in the Enemy Tag to an Or and connecting the Player Tag 
+
+->From the Multi_SpawnFX -> Spawn Emitter at Location -> Pin the Template and location into the event to make inputs 
+->And from its call -> GetActorLocation and plug it into Location 
+
+->Example: Get P_Ky_WaterBallHit and duplicate it ("P_Vomit_Hit") -> open 
+->Disable all the emitters
++Delete Light, Shockwave
++On burst -> Scale Color / Life, change color and value
++On core -> Do the same
++On dust -> Inital Color, change color and value
++On waterDust -> Do the same
+
+->Back in the BP_AIProjectile -> From the Multi_SpawnFX -> Promote the emitter template to a variable ("HitEmitter")
+->In the BP_ProjectileVomit -> Set the P_Vomit_Hit in the HitEmitter 
+->Make Hit? = Private
+->Make Damage = Instance Editable and Expose on Spawn 
+
+->Open the child of the BP_EnemyBase
+->Event DoRangedAttack -> Switch Has Authority -> SpawnActorFromClass -> Plug in BP_ProjectileVomit in Class 
++Notice Damage pops up in the SpawnActorFromClass node
++Get RangedAttackDamage and plug it into Damage
++Make RangedAttack = 40 
++Plug in RangedAttackMontages montage
++Plug in Self into Owner
++So now you have access to the Actor that damaged you 
+->Add Arrow Component ("VomitSpawn") -> Put it under the Mesh 
+->Get VomiteSpawn -> GetWorldTransform -> Plug into Spawn Transform on SpawnActorFromClass
+->Compile -> Save
+->In Viewport -> Put the arrow where the ranged attack is coming from
+->Set RangedDistance = 500 
+
+*Creating The Landscape and Lighting the Environment*
+->File -> New Level -> Empty Level
+->Add Sky Atmosphere
+->Directional Light [turn on Atmosphere / Fog Sunlight, Movable]
+->Skylight [Movable]
+
+->Modes->Landscape 
+->in Google.com, search for free world creator heightmap png
+->Import From File -> Heightmap File -> Select the png
+->Scale up or down depending on the size you want -> Import 
+->Save The Level 
+->Get grass and landscape
++Marketplace permantely free 
+#Vegitation and Grass Landscape Material 
+->Open GrassLandscape Folder -> look for MI_Grass_I_LayerGround
+->In Select Mode -> Select the Landscape -> In Details -> Landscape -> Add the Material to Landscape Material 
+->Go back to Landscape mode -> Select Paint Tab
+->In Layers->Select a layer's drop down and choose gl1 
++Now just select layers you want to paint, adjusting the strength and brush size
+->Select Mode -> Add Exponential Height Fog (0,0,0)
++Adjust Fog Density = 0.0025 and Height Fallout = 0.2
+->Add PostProcessVolume, make infinite
++From Lens -> Exposure -> Turn on min and max brightness
+->Directional light intensity = 1
+Skylight intensity = 0.5
+->PostProcessVolume
++min brightness = .4, max = 1
++vignette intensity = 0.8
+
+*Adding Assets Using Quixel Bridge*
+->We want to add assets into the world using Megascans
++Note: We will change all this to stylized stuff when the time comes
+->Don't download straight from Epic (30GBs) Download the direct assets from quixel.com
++Go to Collections->Environment->Historic->Castle Ruins or Medieval Village
+#For example, lets say you want a wall structure. Click it
+#It will say Download which will lead to "Download Bridge" 
+#Set the .exe to Unreal Engine
+#Inside the app set Texture Resolution to 2K 
+#Material Preset = Unreal 4 or 5
+#Everything else default. And download
+#Export to Unreal Engine + version 
+#Installation Folder = EpicGames/UE#.#
+#Project Location is the location you made the game in
+#Re-open the Project
+
+->Megascans will be installed
+->Click Export on Quixel Bridge
++It will install on the engine
++Drag it into the level
++And put a playerstart actor
++Set the Game Mode to the right mode
++There might not be a collision on the mesh
+->Open Mesh -> Collision -> Auto Convex Collision -> Apply
+->Scale, move and rotate where you want it to be. 
++And duplicate for more detail. 
+
+->Another Collections -> Environment-> in Quixel Bridge is Natural -> Rocky Grassland 
++Get many different rocks from the Natural Selection (Maybe about 10-12)
++Add the collisions, then put them all into the game at once.
+#Separate them then duplicate them (Alt+Drag) and add the duplicates to the world. 
+
+->There are embankments as well
++Put them into the ground then paint the landscape around them
++Use a tool strength of .4 and a Brush size of 200
+
+*Adding Foliage and Temporal AA Improvements*
+->Not using Megascans for the foliage
++Because these are too high poly
++Use PN_GrassLibrary if available
+->Go into Foliage Mode
+->Select all the grass and add to the Foliage
++CullDistance Max = 10,000
++Turn off Cast Shadow, Affect Distance Field Lighting, Static and Dynamic Shadow
+
+*Rolling and Damaing AI*
+->Fixing bugs and improving Player and AI
+->Setting up Health and Death for AI
+->Player Attacks and Rolls and Can't Attack Again
+->Open Character_BP
++If you attack and then you roll before the montage is complete it doesn't get to server end attack
+->Check how long the dodge montage is (0.68)
+->Then on Server_Rolling->From Branch->Remove everything connected to False -> Delete the Input -> Delete the Condition -> just set Rolling to true -> then after Multi_Rolling->Delay for as long as the roll montage is then set rolling false
+->In the Multi_Rolling Event -> Delete the State, Condition, and call to Server Rolling
+->On the Rolling (Or Dodging?) Variable Details -> Make it RepNotify 
+->Open OnRep_Rolling -> Get Rolling -> Branch 
+->Then back in the Multi_Rolling Event -> Copy the Rolling States + Mesh and Get Anim Instance -> Paste them in OnRep_Rolling and plug in the True and False
++Then delete them in the Character_BP
+
+->We're going to be doing the same thing with the Attack
+
+->Go to Multi_PlayMontage -> Check what the Montage to Play is (Should be LightAttack in this case) -> Open the Montage and see how long it takes
+
+->Then on Server_EndAttack Event -> Add a Delay -> Drag Duration into the Server_EndAttack to create an input
+
+->Then in Multi_PlayMontage -> Drag From Montage To Play -> Get Play Length -> Plug in between Play Montage and Server_EndAttack Call with the Return Value into Duration 
+
+->On the Multi_PlayMontage Call from the LightAttack -> Promote Montage to Play ('LightAttackMontage') [Category = Attacking] 
+->Disconnect Get Play Length from the Event and plug it into the call 
+->Set Server_EndAttack to Not Replicated 
+
+->Adding Damage to the AI
+->Open BP_EnemyBase 
+->Event AnyDamage 
+->New Var ("Health") = 100 [float] [Category = EnemyInfo]
+->Get Health -> Subtract by Damage -> Set Health -> Get Health -> <= 0 -> Call Death from BP_CharacterBase 
+->Event Death 
++Dependig on the Enemy, you might want to override other things within the enemy itself. 
+->New function ("F_PlayDeathAnimation") -> Plug into Event Death 
+->New var ("IsDead")[Private Boolean]
+->Before F_PlayDeathAnimation -> Get IsDead -> Not -> Branch -> Set IsDead = true 
+->After animation ->Delay = 5 -> Destroy Actor
+
+->Open the specific enemy
+->Function Override F_PlayDeathAnimation -> Delete Parent -> Play Animation -> Plug in a Death Animation (Have to make one in IClone)
+
+->Open BP_EnemyBase
+->CustomEvent ("Multi_DeadAnimation") [Multicast, Reliable] -> Get Capsule Component -> Set Collision Profile Name = Ragdoll -> Get Mesh -> Set Animation Mode = Use Animation Asset -> Take the F_PlayDeathAnimation instead here and in the EventDead after set isDead to true, call Multi_DeadAnimation 
+
+->After Multi_DeadAnimation Call -> Detach From Controller Pending Destroy
++This will remove the Ai Controller from the AI
+->Get CharacterMovement -> Set Avoidance Enabled = False 
++If other AI is in the area, if this one is dead, other AI will avoid it, so this takes it away
+->Before Detach -> ClearTarget 
+->And from CharacterMovement -> Disable Movement -> Plug back into Delay 
+->Notice the enemy still faces you. We will be setting isCombat to false in the Clear event on the next section. Move the ClearTarget Event to under the DeadAnimation and set isCombat to false. 
+
+*Freeze Movement While Attacking*
+->Go to the Movement 
+->Where Can Move is
+->And Multi_PlayMontage->After Set CurrentlyAttacking -> Set CanMove = false
+->And in Server_EndAttack -> After Set CurrentlyAttacking -> Set CanMove = true
+
+->Also from InputAction Dodging
+->Add to Dodging -> Not
++Add AND CanMove 
+#We only want to Dodge if CanMove is True 
+->If the animation is too long
++Inside the animation -> Slide to where you want to start the cut
++RgtClk -> Remove Frame ## to Frame ##
+
+->2nd Primary Attack 
+->Get the next Animation and make a montage
++We don't want the attack in all the same montage
++Because Server_EndAttack doesn't end till the end of the montage
+->Open Character_BP -> Make LightAttackMontage an Array After Disconnecting it
++Add the two Attack Montages
+->Pull from LightAttackMontage -> Get A Copy -> Random Integer in Range 
+->Pull again -> Length -> - 1 -> Plug into Max
++Get all that -> RgtClk ->Collapse to Function ("F_GetMontage") [Purecast] -> Open
+->Drag Length into the input ("AnimMontage")
+->And plug it into the Get 
+->Then outside of the function, plug in the LightAttackMontage 
+
+*Player HeavyAttack*
+->Project Settings->Input ("Secondary")
+->Character_BP -> Secondary -> Server_TryToActivateAbility [HeavyAttack
+->And add Branch from the Break S_EquippedItems inbetween
+->From Server_TryToActivateAbility -> We will be duplicating the info from the LightAttack
++So we need to Collapse to a Function ("F_PlayerAttack") [Category = Server] everything except the montage after the switch
+->Duplicate F_PlayerAttack 
+->Duplicate LightAttackMontage ("HeavyAttackMontage") -> Plug into F_PlayerAttack
+->Get the animation and montage made (IClone)
+->Note: When looking at animations, if you click the Root bone on an animation that moves, the root motion is when there is a yellow line that moves with the player
++If it doesn't do that, it is not root motion 
+
+->In AnimBP_Player -> Create a var ("FullBody") [Boolean]
+
+
+
+
+->Save Everything and open S_PickupInfo
+->Change Damage = LightDamage
+->Make new var HeavyDamage [float]
+->Save Struct -> Close project and don't save
+
+->Inside of weapons change the amount of damage for HeavyDamage
+
+->INT_PlayerCharacter->new function ("HeavyAttack")
+->Character_BP -> Event HeavyAttack -> Copy everything from LightAttack into Heavy 
++Then plug in the HeavyDamage in the end
+
+->Copy ANS_LightAttack to Create Anim NotifyState ("ANS_HeavyAttack") -> open
+->Name = HeavyAttack
+->Begin -> HeavyAttack 
+
+->Inside of Montage, add the ANS_HeavyAttack
+->Multiplayer has broken AI, the guy will fix it later.
+
+*Adding Sound Effects*
+->freesound.org
+->This assignment comes with a SFX download
++Download and unzip
+->Make a Sounds Folder in the Project
+->Import sounds and make sound cues
++Attenuation -> Override Attenuation
+#This makes the sound 3 Dimensional
+#You can put two sounds and add a Random from Palette
+
+->Example
+->In walking animation
+->On Notifies -> RgtClk -> Add Notify -> Play Sound (Footstep Cue)
+
+->In BP_EnemyBase
+->Note in Event Set Roaming, make sure on fail doesn't ClearTarget
+->Taunt montage: Do the same with the Taunt, and Heavy Attack (Using GroundSmash)
+
+->BP_CharacterBase
+->Put a SwordWoosh when attacking using same idea
+->SwordHit is different (put them in the AI and override in the enemy)
+->But for simple:
+->In Event Damage->At the For Each Loop -> From Completed -> 
+->Create Custom Event ("Multi_PlayHitSound")[Multicast, Reliable]
+->Play Sound At Location and plug in Sound and Location into the Event to make Inputs
+->Compile
+->Call Multi_PlayHitSound from Completed
++GetActorLocation into Location
+
+->Note: Will probably need more kid friendly attack sounds (these sound a little gruesome) 
+
+*Resetting AI and ClearTarget*
+->BP_EnemyBase
+->From Event ClearTarget -> Set Actor Tick Enabled = False -> Set PlayerTarget = none -> AI Move To (Self) (Start Combat Location) 
+-> Note Rename StartingLocation to 'SpawnLocation'
+->In Event Set PlayerTarget -> After Set isCombat -> Set isRoaming = False
+->From AI Move To Success -> Set Roaming from INT_EnemyAI
+->On Fail -> SetActorLocation = SpawnLocation -> Set Roaming from INT_EnemyAI
+
+->New Function ('F_DistanceCheck') 
+->At end of Event Set Player Target -> Set Timer By Function Name ('F_DistanceCheck') Looping True, Time = 0.5 -> Promote Return Value ('DistanceHandle')
+->In The Event Check For Taunt -> Copy GetDistanceTo, including its inputs, output and the branch -> Paste into F_DistanceCheck function
+Set Distance's >= to be 2500
+->True -> ClearTarget 
+->Test by Print String the Return Value of GetDistance at the beginning of the function 
+->After ClearTarget -> Clear and Invalidate Timer by Handle = DistanceHandle 
++This clears the timer when no longer targetting
+->Take out F_MovementState from Begin Play and put it after the branch in Roaming Event 
+
+->Open EnemyAI_Controller
+->Custom Event ("ClearTarget") -> Set Target = None
+
+Back in ClearTarget -> Get Controller -> Cast to EnemyAI_Controller -> Call Clear Target after Set Player Target 
+
+*Player Footsteps on Physical Materials*
+->Download the Horror Engine from Epic (It's Free) 
+->It has a bunch of cool things to learn from
+->And it has footstep sounds (Dirt, Grass and Rock)
+
+->Project Settings -> Physics
++Physical Surface
+#'Rock'
+#'Grass'
+#'Dirt'
+#'Mud'
+#'Water'
+->RgtClk -> Physics -> PhysicalMaterial -> Select ('Grass') 
++Set Surface Type
++Duplicate for each Type and set the Type
+->In Landscape Mode -> Paint -> Select a Material Layer -> Go to its origin -> Set its Physical Material Surface Type
+
+->Go to the Running Animation for the Player
+->RgtClk -> New Notify ('Footstep') for everytime the foot lands
++Do Skeleton Notify after the new one
++Or RgtClk and copy the notify and paste it
+
+->Open AnimBP_Player -> Event Graph
+->RgtClk AnimNotifyEvent (Footstep) -> Line TraceByChannel -> Try Get Pawn Owner -> Get ActorLocation -> Into Start -> - 200 -> Into End
+->Branch from Return Value
+->From Actors to Ignore -> Make Array -> -> Into Try GetPawnOwner
+->Drag off and break the out hit -> Drag from Phys Mat -> Get Surface Type -> Select
+->From True -> Play Sound at Location -> Return Value of Select = Sound -> Location of Break Hit Result = Location 
+->Fill each Surface Type with the Sound Cue 
+
+->This works on Meshes too
++Go to a rock and browse to its Material -> Open
+->Go down to Phys Material and set to Rock, for example
+
+->Note: Turn on Override Attenuation on all the Cues
+->Change the Volume Multiplier on the cues = 0.3
+
+*Blocking*
+->Make animation for blocking
+->New Action Map ('Blocking')
+->Open BP_Player->Call Blocking
++New var ('Blocking')[boolean][RepNotify]
+->Get Blocking->Not->Branch
+
+->CustomEvent ("Server_Blocking")[Run on Server, Reliable] -> Input -> State [boolean]
+->From True -> Server_Blocking = true; From False-> Server_Blocking = False
+
+->From Event Server_Blocking -> Branch [condition = State] -> True -> Blocking Variable = True -> False -> Blocking = False
+
+->Open INT_Anim_BP 
+->New function ('BlockingState') -> Input -> State [Bool]
+
+->Open AnimBP_Player -> Event BlockingState -> promote State to var ('isBlocking')
+->Go into GroundLocomotion -> Idling -> 
+->Note: If we had something like a two handed sword, we'd use Blend Pose 1 
+->After the Blend by Int -> Create Blend Pose by Bool -> Plug in the return of int into False of the bool 
+->Put isBlocking into the active value -> The True Pose would be to Play the Blocking Animation Loop 
+
+->In BP_Player ->Open On_RepBlocking (which was made when we made the Blocking Variable an RepNotify)
+->Get Mesh -> Get Anim Instance -> 2 Blocking State -> Get Blocking -> Branch -> True and False
++This basically updates the animation
+
+->In the Blocking Call -> Get EquippedShield (or whatever weapon you plan to block with) -> convert to validated get -> And plug into Branch
+
+->This blocking is only while Idle, so we want to block while moving as well
+->In the AnimBP_Player -> AnimGraph -> Copy Layered Blend Per Bone
+->Go into Ground Locomotion -> Jogging -> Paste Layer Blender -> Also Create a Blend Poses by Bool with active value as isBlocking 
+->Copy Jog_Fwd or whatever the animation is for moving -> And paste the copy and plug into the False Pose 
+->Play Jog into Base Pose -> Blocking_Loop into Blend Poses 0 
+->This only works with Blended Poses. 
++Meaning upper and lower body blends
+#In the layered pose->Click the node->Then add in 3 Branch Filers for pelvis, thigh_l, and thigh_r. 
+`Make pelvis depth 4, and thighs -1 
+#Hopefully this will work out properly. 
+->We don't want sprinting while blocking 
++Open Jogging to Sprinting Transition -> Add isBlocking -> Not to the And Node 
+
+->In BP_Player -> From InputAction Sprint -> Get Blocking -> Not -> Branch -> And put the True into F_SprintSwitch (the true one, false one doesn't need this...)
+
+->In Beginning of Event AnyDamage -> Get Blocking -> Branch -> And plug in the rest into the False node. 
+->New function ("F_CheckBlockingDirection")[Category = Server] -> Input -> Actor [Actor]
+->Plug into True -> Plug Damage Causer into Function's Actor
+->In function -> Pull from Actor -> Get ActorLocation -> Get a seperate GetActorLocation -> Get Unit Direction (Vector) 
++Basically this checks from the Enemy's Location to the Player's Location
+->Get Actor Forward Vector -> Split the Return -> Make Vector -> Plug in X and Y -> Normalize, Tolerance 0.0001 -> Plug Return into A -> Get dot product
+->Then from Get Unit Direction -> Split the return and make vector X, Y -> Normalize 0.0001 -> Plug into dot 
+->From dot product -> <= -0.4 
+->Create Output -> Return [boolean] -> Plug the return of <= into Return 
+
+->Back in event calling the function -> Branch from Return -> From True 
+->Custom Event ('Multi_BlockingEffects')[Multicast, Reliable]
+->Call From True 
+->From False -> Plug into the Damage Logic 
+
+->In the Multi_BlockingEffects -> You would want to Spawn Emitter Attached then Play Sound at Location -> Plug both Locations into the Event -> As well as Emitter Template -> And Attach Point Name 
+->And you can play a montage for (like the animation of blocking an attack)
++Plug in the Skeletal Mesh and the Montage to Play into Event 
+->Until you get that data -> For now disconnect the Event from those nodes so it will play 
+
+=>Stamina System and Collecting XP
+
+*Draining and Recovering Stamina While Sprinting*
+
+->Open the BP_Player -> F_SprintSwitch
++We want to implement timers and functions that will activate whether we are holding the sprint key or not
+->At the end of the server call. Disconnect the Set Notifies from the Return node
+->Create a Get Timer By Function Name node -> Duplicate it for the second notify -> Set Time = 0.2 -> Turn on Looping
+->When Sprinting is false, the name is F_RecoverStamina, the other is F_DrainStamina -> Promote the Return Values ('DrainStaminaHandle', 'RecoverStaminaHandle')
+->After the false Sprinting Set -> Get DrainStaminaHandle -> Clear and Invalidate Timer by Handle, and do the opposite when it is true
+->New function ('F_DrainStamina') 
+->New function ('F_RecoverStamina')
++[Category for both = Server]
+->In Drain -> Get PlayerStats -> Break -> From Current Stamina -> <= 0 -> Branch -> From True: F_SprintSwitch = False
+->From False -> Duplicate PlayerStats and Break with Current Stamina -> - 1.0 ->  
+->From PlayerStats-> Set Members -> Click CurrentStamina -> Plug in the return of - 1.0 into CurrentStamina 
+
+->Open BP_PlayerController -> INT_PlayerController 
+->In INT->New function ('UpdateStaminaUI') -> Input -> Stamina [float]
+->In BP->Event UpdateStaminaUI -> Make a CustomEvent ('Client_UpdateStaminaUI') [Run on owning Client, Reliable]
+->Call CustomEvent from UpdateStaminaUI
+->Open the W_PlayerUI by double clicking the UpdateHealthUI
+->CustomEvent ('UpdateStaminaBar') -> Input -> StaminaPercent [float] 
+->Back in BP->Get PlayerUI->UpdateStaminaBar->Plug in StaminaPercent into the Event
+->And plug in the StaminaPercent into Stamina in the UpdateStaminaUI Event
+
+->In BP_Player->F_DrainStamina -> After Set Members -> Get Controller -> UpdateStaminaUI -> From Struct Out -> Break -> From CurrentStamina / MaxStamina -> Plug into Stamina 
++This will get the percentage
+
+->In W_PlayerUI -> Search for Spacer -> Put under HealthBar -> Copy HealthBar -> Select Vertical Box and Paste ('StaminaBar') [Green Color]
+->Set Spacer Y = 10 -> StatsBorder Y = 45 
+->In Graph -> Get StaminaBar-> Set Percent -> Plug things in.
+
+->F_DrainStamina -> From False connect another Branch
+->Get Velocity -> Get VectorLength -> > 0 -> Get CharacterMovement -> IsFalling -> Not -> And Bool -> And plug in the True into the Drain Logic 
+
+->To stop the running animation after you are not moving:
+->AnimBP_Player->Ground Locomotion-> ->Opening transtion from Jogging to Sprinting -> Do an And Bool -> Speed > 200 
+->From Sprinting to Jogging -> Get Speed < 0.1 -> OR Bool 
+
+->In F_RecoverStamina -> Get PlayerStats -> Break -> CurrentStamina -> + 0.5 -> Get PlayerStats -> Set Members = CurrentStamina -> Plug in + 0.5 -> >= MaxStamina -> Branch -> True -> Get RecoverStaminaHandle -> Clear and Invalidate -> Get PlayerStats -> Set Members = CurrentStamina -> Plug in MaxStamina into the CurrentStamina 
+->From False -> Get Controller -> UpdateStaminaUI -> Duplicate PlayerStats + Break -> CurrentStamina / MaxStamina -> Plug into Stamina 
+->At the end of the logic -> Get Controller -> UpdateStaminaUI 1.0 (1.0 = 100%)
+->And from the F_DrainStamina after the second branch -> In its false -> Call F_RecoverStamina 
+
+->The Client still thinks we are Sprinting (since it is set in the Server and not the Client)
++If you ever see your characters jittering it means the client and server are not communicating
+->So...
+->In movement (Inside BP_Player or BP_ThirdPersonCharacter??) -> CustomEvent ('Client_Jogging') [Run on owning Client, Reliable] -> Get CharacterMovement -> Set MaxWalkSpeed = JogSpeed 
+->From F_DrainStamina -> After you call F_SprintSwitch -> Call Client_Jogging 
+
+*Drain Stamina From Abilities*
+->From InputAction Rolling/Dodging -> Get PlayerStats -> Break -> From CurrentStamina -> >= 40 -> Branch -> Plug in logic from True
+->New function ('F_ReduceStamina')[Category = Server] -> Input -> StaminaToReduce [float]
+->From Server_Rolling Event -> After calling Multi_Rolling->Call F_ReduceStamina = 40
+
+->Open F_DrainStamina -> Copy everything after the second branch's True
+->Paste in F_ReduceStamnia -> Stamina to Reduce goes into the minus
+->At the end get Sprinting -> Not -> Branch 
+->Copy the Set Timer By Function Name = F_RecoverStamina in F_SprintSwitch including RecoverStaminaHandle and paste at the end of F_ReduceStamina after True in Branch
+->Now we can use F_ReduceStamina for all things we want Stamina for
+->Change F_RecoverStamina to 2.5 in its logic
+
+->Put the test for stamina and F_ReduceStamina in attacking logic. LightAttack 20, HeavyAttack 50 
+
+*Add Souls/XP On AI Death*
+->Open BP_EnemyBase and BP_Player -> INT_PlayerCharacter
+->New function ('SpawnXPParticle') (tutorial known as SpawnSoulsParticle) -> Input -> XP [Integer] 
++Spawn particles on the player to indicate the player is collecting experience
+->In BP_Player -> Event SpawnXPParticle
+->CustomEvent ('Multi_SpawnXPParticle) [Multicast, Reliable]
+->Call the Multi from the SpawnXPParticle
+->In Custom Event -> Spawn Emitter Attached
++Plug in Emitter Template and Attach to Component to the Event
+->Compile
+->In the call, plug in the Mesh and plug in a Particle (temp one for now)
+
+->In BP_BaseEnemy
+->Going to do in the death event -> Important to do this before we ClearTarget, because we want the Player to be valid to call the event on the player
+->After Set IsDead to True -> Get PlayerTarget -> SpawnXPParticle -> 
+->Add Variable ('XPAmount') [Integer, Category = EnemyInfo. Move under health]
+->Plug into XP 
+
+->In the BP_BaseSoldier Details under EnemyInfo -> XPAmount = 200. BP_RougeThief -> XPAmount = 50 
+
+->In BP_Player -> On the SpawnXPParticle Event -> Get PlayerStats -> Set Members -> Turn on XPCollected
+
+->Note: Calling the PlayerTarget isn't the best way to collect the XP. 
+->For instance the Target could still clear when dead
+->Instead we will use the Damage Causer from AnyDamage
+->DblClk the Death Event on BP_EnemyBase 
++This opens it in BP_CharacterBase
++Input -> Actor ('Player')
+->Back in BP_EnemyBase -> Plug in Player to Target from Death, and Damage Causer to Player from AnyDamage
+
+->Open W_PlayerUI
+->Back in Engine -> Go to EngineContent Folder in Content -> Filter = Texture and look for 'Black' 
++To do this click View Options at the bottom right and turn on EngineContent
++We can always make one in Photoshop
+->Add Border to Canvas Panel ('XPBorder') [Anchor = Bottom Right, PosX and PosY = 0, Move Alignment until it is in the window, SizeX = 145, SizeY = 30]
++Horizontal Alignment to the right
++Brush -> Image = Black, Alpha = 0.5
+->Inside border add Text ('XPText') [isVariable = True, Text = 0]
++Horizontal Alignment to the right
+
+->In Graph 
+->Custom Event ('UpdateXP') -> Input ('XP') [Integer] -> Get XPText -> SetText -> from XP plug into in Text (this will convert it)
+
+->In BP_Player
++From PlayerStats -> Break-> Get XPCollected and + XP From the Event and then plug it into Set Members
+
+->BP_PlayerController -> Open INT_PlayerController 
+->New function ('UpdateXPUI') -> Input -> XP [Integer]
+->Add Event UpdateXPUI -> CustomEvent ('Client_UpdateXPUI') [Run on owning Client, Reliable] -> Input -> XP [Integer]
++Call it from Event 
++Get PlayerUI -> UpdateXP 
+
+->BP_Player -> From Set Members -> Break -> Get Controller -> UpdateXPUI 
++We'll do the Multi_SpawnXPParticle last 
+
+=>Targeting System
+->Pressing the Targetting button will lock the camera on the closest enemy
+->Doesn't have strafe just yet
+
+*Actor Components and Inital Set Up*
+->Input Action Mapping ('Targetting')
+->Open BP_Player
++We are going to use an Actor Component
++These can be put on other characters
+
+->New BP_Class [ActorComponent] ('BP_TargettingSystem')
+->Add BP_TargettingSystem to BP_Player
+->Open BP_TargettingSystem
+->CustomEvent ('Initialize')
++This is to enable the component when we want, instead of begin play
+->GetOwner->Cast to Pawn->Promote ('PlayerPawn')->Get Controller ->Cast To PlayerController -> Promote ('PlayerController') [Make Both Replicated] 
+->On BP_Player->EventPossessed->Get BP_TargettingSystem->Initialize
+->BP_TargettingSystem->CustomEvent ('LockOnTarget')
+->In BP_Player-> InputAction Targetting -> 
++New var ('isTargetting')
+->get CanMove -> Branch -> True: Get isTarget -> Not -> Branch -> Set IsTargetting True, and False when False ->Get BP_TargettingSystem -> LockOnTarget
+
+->In BP_TargettingSystem -> new Var ('CurrentlyTargetting') [Bool] 
+->From LockOnTarget -> Get CurrentlyTargetting -> Not -> Branch ->
+->CustomEvent ('FindTargets')
+->From True -> FindTargets
+
+*Getting Enemies to Target*
+->Drag from FindTarget -> SphereOverlapActors ->Get PlayerPawn->GetActorLocation->Into SpherePos
+->Object Type -> MakeArray = Pawn 
+->Actor Class Filter = BP_EnemyBase
+->Draw Debug Sphere 
++Make both Radius to 1200 for now
++Red, 5.0, 2.0
+->Drop Down from Play -> Net Mode = Play Offline
+->From Out Actors -> For Each Loop -> From Array Element ->
+->Open BP_EnemyBase -> INT_EnemyAI -> new function ('IsAIDead') -> Output -> IsDead [Boolean]
+->Back in BP_EnemyBase -> File -> Refresh 
+->Open IsAIDead -> Plug in IsDead variable
++Make IsDead Replicated
+->Back in BP_TargettingSystem -> From Array Element -> IsAIDead -> Not -> Branch -> From Arrary Element -> Promote ('PotentialTargets') [Arrary]
+->After True -> Get PotentialTargets -> AddUnique -> Plug in Array Element
+->From ForEach Loop's Completed -> Get PotentialTargets -> For Each Loop -> Array Element -> Promote ('LockedTarget') -> Disconnect this and compile then delete the set
+->Get LockedTarget -> Convert to Validated Get -> Is Not Valid -> Get PlayerPawn -> Get Distance To -> Array Element = Other Actor 
+
+->Make FindTargets Run on Server, Reliable
+
+->From GetDistanceTo -> Promote ('ClosestDistance') = 1200 -> Then from GetDistanceTo again -> < -> ClosestDistance -> Branch -> True -> Plug into Set ClosestDistance
+->Remove Set LockedTarget and set it at the end of this logic -> Plug in Array Element
+
+->From Completed -> Set ClosestDistance = 1200 -> Get PotentialTargets -> Clear -> Get LockedTarget -> Validated Get -> 
+
+->CustomEvent ('ToggleCameraLock') -> Input -> State [Boolean] -> Branch -> From True -> Set CurrentlyTargetting = True -> From False to False
++And set CurrentlyTargetting to Replicated 
+
+->From Validated Get -> Call Toggle camera Lock = true
+
+->In BP_ThirdPersonCharacter -> new Bool ('LockedOn') [Replicated]
+->From InputAxisTurn, InputAxisLookUp -> Get LockedOn -> Not -> Branch For both -> From True -> Plug into Input functions
+->Open INT_PlayerCharacter -> New function ('LockCamera') -> Input -> Lock [Bool]
+->Add Event LockCamera -> Plug in LockedOn 
+
+*Lock on Target and Draw Widget*
+->In BP_TargetingSystem -> From Set CurrentlyTargeting true -> Get PlayerPawn -> Call LockCamera = True and set the Falses
++We haven't set the False yet
+->From the last for each loop completed -> From LockedTarget isValid -> Set CurrentlyTargeting = true->
+-> from Toggle Camera Lock->Set Timer By Event, 0.25, Looping -> From Event -> Add Event ('CheckTargetDistance') -> Get PlayerPawn and LockedDistance -> Get DistanceTo -> > -> 1500-> Branch ->True -> Set LockedTarget = null->ToggleCameraLock = False ->
+->On Timer's Return Value -> Promote ('LockHandle') 
+->Get LockHandle-> Clear And Invalid Timer by Handle
+
+->From LockOnTarget Event -> From False: ToggleCameraLock = False ->Set Locked Target = null
+->Clk ToggleCameraLock -> Set to Run on Server, Reliable
+->In BP_Player->Click BP_TargetingSystem Component->Details: Set Component Replicates to true
+
+->On BP_Player Input Targeting -> Remove the branch from True and just connect the Event Call
+
+->Open BP_EnemyBase and INT_EnemyAI 
+->New function ('ToggleTargetWidget') -> Input -> State [Boolean] -> 2nd Input -> Player [Actor]
+->New Event ToggleTargetWidget -> Branch
+->Add Component -> Widget ('TargetWidget')
++Details: User Interface
+#Space = Screen
+#DrawSize (50,50)
+
+->Create New Widget -> W_Target -> open
+->Add Image -> In Brush details
++We want something with a transparent background
++Image Size (50,50)
++Size to Content = True
++Fill Screen (Top Right of Viewport) = Desired
+
+->Add W_Target to BP_Enemy's TargetWidget WidgetClass
+->Go to Rendering->Hidden in Game = True
+->Generate Overlap Events = False
+->From True -> Get TargetWidget->Set Hidden In Game = False, and from False set it to True 
+
+->BP_TargetingSystem->From ToggleCameraLock->Get LockedTarget->Call ToggleTargetWidget = True from the true side, False from the false side, and Set LockedTarget, move it to the end
+->GetOwner->Plug into Player for the ToggleTargetWidget Calls
+
+->BP_EnemyBase->CustomEvent ('Multi_TargetWidget') [Multicast, Reliable]->Input->State [Bool] -> Player [Actor]
+->Put the logic of Event ToggleTargetWidget in Multi_TargetWidget and call it from the Event 
+->From Multi_TargetWidget->Player->Get Instigator Controller->IsValid Function->New Branch-> In Front of the first->Plug in from True
+
+*Camera Rotate Around Target*
+->Open BP_Player 
+->Running from InputAxisTurn (which is a TickEvent) instead of having to do in an EventTick 
+->From Lockedon->Not->Branch = False ->
+->New function ('F_LockOn') 
+->Plug into False
+
+->Open Event LockCamera -> Add input -> LockedTarget [Actor] 
+->Back in player -> ->Branch from LockedOn-> Drag from Target -> Promote ('Target') [Replicated] -> From True LockedTarget into Target -> From False Target = null 
+
+->In BP_TargetingSystem -> ToggleCameraLock Get LockedTarget -> Plug into Target of LockCamera 
+
+->Inside F_LockOn -> Get Controller -> Set Control Rotation -> Get Player Camera Manager -> Get Target 
+->From Camera Manager-> Get Camera Location -> Break Vector 
+->From Target -> GetActorLocation -> Break Vector 
+->Create Find Look At Roation Node -> Make 2 'Make Vector' Nodes
+->Plug in X,Y of Breaks into Makes 
+->Plug Look at -> Break Rotator -> From New Rotation -> Make Rotator -> Plug in X and Z into New Rotation -> Y -> + (-25) -> Plug into Y
+
+->Clear Widget when far away
+->From CheckTargetDistance -> Delete Set LockedTarget
++Because we are already clearing it in ToggleCameraLock
+
+=>Boss AI
+
+*Introduction and Initial Setup*
+->Make sure to make animations with root motion
+->The Boss (Who in our case will be a mini boss (Soldier)), overrides most of the BP_BaseEnemy functionality
+:This is for unique bosses and enemies, most others will not need this.
+->AI Folder->New Folder ("Soldier")
+:Make a child from BP_EnemyBase ("BP_Soldier")
+::Add it to the folder -> open
+::Add the mesh to the character
+::Adjust MeleeSphere
+:::We might not need this...
+::Add weapon mesh -> No Collision
+->In the Animation (Potentially the Idle)
+:Add socket to hand_r ('Weapon')
+->Back in BP -> Attach the weapon to the mesh
+:Make its parent socket Weapon 
+:Reset location 0,0,0
+->Add Preview Asset to the Weapon socket
+:Adjust it for now and save
+->Make AnimBP ('AnimBP_Soldier') and AnimBS ('ABS_Soldier')
+->Open the AnimBP and AnimBS for the RogueThief
+:Copy the AnimBP info from Rogue and paste to AnimBP_Soldier 
+::Rgtclk and create variables for speed and direction
+:In the AnimGraph, copy from the RogueThief and paste it into Soldier
+:Replace the BS for the RogueThief for the Soldier
+:Copy the AnimBS from the RogueThief to the Soldier
+::Including Grid Divisions, Interpolation, Direction and Speed
+->Plug the ABP into the BP 
+->If needed make the capsule bigger on the Soldier
+->Drag Soldier into the Test Level
+:And make him bigger if needed (Like Scale XYZ 1.4)
+
+*Entrance and First Attack*
+->Add an in place movement. 
+:Only root motion attacks
+->Get a forward walking animaton
+->Add Walk forward in 180 speed in ABS
+->Open BP_Soldier
+:EnemyInfo in Details
+::Health = 1000, XPAmount = 5000, WalkSpeed = 180
+->Simulate in the Engine to make sure he walks
+->But we only want walking after aggro
+->On the BP_BaseEnemy BeginPlay they start walking
+:Copy GetActorLocation, BeginPlay and SpawnLocation -> Move it to BP_Soldier (Make sure to delete all the starting info on the BP_Soldier)
+->SpawnLocation is private, we need to set the SpawnLocation in a function
+->In BP_EnemyBase -> new function ('F_StartingSpawn') -> Set SpawnLocation and plug into the function to make an input
+->Back in BP_Soldier's EventBegin play->Replace Set SpawnLocation with the function F_StartingSpawn -> And plug in GetActorLocation and plug into SpawnLocation input
+->Compile and Test
+
+->Bosses are all about animations
+->Get a good intro animation for the BP_Soldier
+->If they are moving, Enable Root Motion and make Montage
+:Also add footstep notifies to the montage 
+:And n the animation blueprint -> Get AnimNotify_footstep
+->In EnemyAI_Controller -> Create EventOnPosses -> Get PawnSensing -> Set SightRadius 
+->Open INT_EnemyAI
+:New function ('GetSightRadius') -> output -> Radius [float] -> Save
+->BP_EnemyBase
+:Open GetSightRadius -> Promote variable to SightRadius [Category: EnemyInfo] -> Put under Health -> Compile
+::Allows us to set sight radius per enemy
+->BP_Soldier->Class Defaults->SightRadius = 2500
+->EnemyAI_Controller -> At the start of EventOnPosses -> GetSightRadius -> Plug in Possesed Pawn ->Radius into Sight Radius -> Plug into a Print String and Test to make sure it says 2500
+
+->We want to Set PlayerTarget
+->Get the whole of Event SetPlayerTarget and Event Tick from BP_EnemyBase
+:Copy into BP_Soldier
+:Set all the variables to public that are not working in the paste
+::Keep isRoaming as private and delete it from the Soldier
+::Also in the details of the variables turn them to AdvancedDisplay so they don't show up in the BP_Soldier details
+:Remove SetActorTickedEnabled
+:Set MovementState = Walking and disconnect everything after it
+
+->CustomEvent ('PlayEntranceMontage') [Multicast] -> PlayMontage -> Plug in SkeletalMeshComponent and MontageToPlay into the Event to make inputs
+->Call it after the MovementState 
+:Mesh goes into SkeletalMeshComponent, Montage is your intro animation
+
+->BP_EnemyBase
+:Copy all Event ChasePlayer into BP_Soldier
+:From PlayEntranceMontage Event -> On Completed -> Call ChasePlayer -> And in Event ChasePlayer-> remove RunAttackChoices
+:We are going to do our own attack choices
+
+->CustomEvent ('FirstAttack')
+->Create ChargeAttack Animation (Enable Root Motion), Create Montage
+:Add footstep notifies
+->From Chase Player->On Success -> FirstAttack
+->From FirstAttack -> PlayMontage (Plug in Inputs)
+->In ChasePlayer's AI MoveTo -> Acceptance Radius = 500
+->Disconnect the EventTick and remove the isCombat branch in Event ChasePlayer
+
+->Good animations can make a game great!! Bad animations can make it really bad
+
+->Delete the Event ChasePlayer node
+:Replace with CustomEvent ('FirstPursuit')
+:And replace in places
+->When calling FirstPursuit -> Get Switch Has Authority after OnCompleted
+->CustomEvent ('DefaultPursuit') -> After FirstAttack -> From OnCompleted -> Switch Has Authority-> DefaultPursuit
+:Add AIMoveTo after DefaultPursuit -> Acceptance Radius = 200 
+::We will set up more attacks and randomize them
+
+*ChargeAttack and Damage Effects*
+->Open the First Attack's Montage
+->Add two Notifies 
+->We are going to make an interface for bosses
+->New Interface ('INT_Bosses')
+:Set the BP_Soldier's interface
+->New Function ('ChargeAttack')
+:In BP_Soldier -> Event ChargeAttack
+->Rename FirstAttack to Multi_ChargeAttack
+->In AI Folder ->New BP -> Notify ('AN_GroundAttack')
+:ReceivedNotify->From MeshComponent->GetOwner-> ChargeAttack
+->In Montage->Add AN_GroundAttack when he hits the ground
+->In Event ChargeAttack->Switch Has Authority
+->Duplicate AN_GroundAttack ('AN_SpecialEffects')
+->Open INT_Bosses -> new func ('BossSpecialEffects')
+:Inputs->Emitter [Niagara System]->Location [Vector]->Rotation [Rotator] -> Scale [Vector]->Sound [Sound Base]
+->In BP_Soldier->Event BossSpecialEffects
+:Spawn System At Location
+:Play Sound at Location
+:Plug in all pins where they need to be on the Event
+->Open AN_SpecialEffects->Replace the Event with BossSpecialEffects
+->In Montage, Call AN_SpecialEffects when he hits the ground
+->Back in AN_SpecialEffects->Promote to variables (Emitter, Location, Rotation, Scale, Sound)
+:Click the eye on all of them to make them Instance Editable
+:So on the animation, when you click AN_SpecialEffects you have variables you can set up
+:From Mesh Component->Get Socket Location
+::Scale (1,1,1)
+::Add Socket to Animation Root ('PlayFX') and place it near the Weapon when it lands
+::Add another notify -> PlayParticleEffect and test with a particle
+::Delete it after it is set up
+:In Get Socket Name = PlayFX -> Promote to Variable ('SocketName') [Instance Editable]
+->Plug Socket Location into Location
+
+->From Event ChargeAttack->Switch Has Authority->SphereOverlapActors->Object Type -> Make Array = Pawn -> Radius = 200 
+-> In INT_Bosses -> ChargeAttack -> Input -> Location [Vector] 
+->Plug in Sphere Pos
+->Actor Class Filter = BP_Player
+->In AN_GroundAttack->From MeshComponent->Get Socket Location-> Plug into ChargeAttack Location -> SocketName = PlayFX -> Promote ('SocketName')[InstanceEditable]
+->Back in BP_Soldier->After SphereOverlapActors->Draw Debug Sphere
+:Radius = 200, Color = Res, Duration and Thickness = 2
+:Duplicate and put into Remote of Authority
+->From Out Actors->For Each Node
+->Return Value -> Branch->True into For Each-> 
+Array Element->Get Display Name->Into Print String to Test
+->ApplyDamage = 100, Damage Type = DamageType, Causer = Self 
+
+=>Freeze Player Movement During Cutscene
+->In SetPlayerTarget->After movement mode before Entrance
+->Pull from Player Target Input->Call UpdateMovement = False
+->From Entrance->On Completed->Get PlayerTarget->Call UpdateMovement = True-> Plug into the end of the functionality. 
+
+*Additional Boss Attacks*
+->After DefaultPursuit we want the boss to attack after getting within 200 radius. 
+:Lets set up these Attacks
+->We want Root Motion Attacks
+:To make the boss difficult, get fast attacks
+->Might need to retarget the attack
+->Create montage ("Soldier_AttackF")
+:Add footstep notifies if needed
+
+->In INT_Bosses
+:New function ("Attack01")
+->BP_Soldier 
+:Call Event Attack01
+:Duplicate "AN_GroundAttack" ("AN_Attack01") -> Open
+::Delete SocketName
+::In ReceivedNotify->Delete the socket and the called function
+::Then call Attack01 (Message)
+
+->In the Montage
+:On the attack add AN_Attack01 where it goes
+->In his example, the Knight does a punch first then a swing
+->So do all the same above for Attack02
+:And add functions for each Attack
+->And in the BP_Soldier -> Comment each Attack to make sure you know what you are doing
+:Add AnimNotifies to the Montage 
+
+->From the Attack02 in BP_Soldier
+:SphereOverlapActors->Object Types -> Make Array = Pawn -> Radius 100
+:GetActorLocation -> + ->
+:GetActorForwardVector -> * 100
+:Into Sphere Pos
+->Draw a Debug Sphere with those stats, Red, Duration and Thickness = 2
+->From DefaultPursuit's Success->Multi Play Montage (Soldier_AttackF)->Change acceptance radius to 100
+:Notice the montage has the AnimNotifies which call the functions 
+
+->Copy all the logic from Attack02 and paste into Attack01
+->ForwardVector * 120 instead of 100 
+
+->Copy the ending branch, foreach, applydamage from the charge attack and paste it into the Attack01 and 02
+::The weak attack will temporarily stun the player
+:Make a weak attack 30 damage, and the regular attack = 70
+
+->Note: On attacks where the weapon looks wrong, you can select the hand it is in, add a key where it is starting the attack and rotate the hand
+
+->Another Note: Don't forget to set root motion on the animations if they are moving in a direction. 
+
+->Make as many attacks as possible with the same logic in the BP_Soldier, adding in the right AnimNotifies based on the Attack type, and put the multi_playmontage for each one and test on success
+
+->From DefaultPursuit->From Success->Switch on Int->Add a pin per montage->Plug in a random integer in range node with the min = 0 and max = #ofmontages
+
+->We need to make a new defaultattacks event that will be called in place of multi_playmontage
+->Custom Event ("Multi_DefaultAttacks")[Multicast, Reliable]->Play Montage, plug in skeletal mesh and montage to play->on completed->Call DefaultPursuit
+:Plug one in for each multi_playmontage, delete those, and set the right montage
+:This is different that it chooses to do the defaultpursuit after the boss is done attacking, giving him the ability to choose attacks again. 
+
+->Adjust SphereOverlapActors radius and forwardvectors based on the attack type to determine where the attack will be and how large the radius is. 
+
+*Player Strafing & Targeting*
+->Get Walk_Forward, Backwards, Idle, Strafe-L and Strafe-R animation
+->Create a Blendspace 2D ('BS_WeaponStyle')->open
+:Horizontal = "Direction" -180, 180 Divisons = 12
+::-90 = Strafe-L, 90 = Strafe-R, 100 and -100 Walk_Backward
+:Vertical = "Speed" -100, 600, Divisions = 7
+::0 = Idle, 100 = Walk_Forward, 400 = Run_Forward, 600 = Run_Forward
+:Target Weight Interpolation = 4
+
+->Open AnimBP_Player->AnimGraph->GroundLocomotion->Idling
+:Add Blend Pose by Bool ->Promote ("IsTargetting")->Connect to False pose of last Blend Pose->
+:If true, do the targeting idle, false normal idle
+:Add Blend Pose to movement state
+::Use BS_WeaponStyle in True pose, promote Direction 
+->In Event Graph -> After Set Speed-> Try Get Pawn Owner->Get Velocity and GetActorRotation->Calculate Direction->Set Direction 
+
+->Open INT_Anim_BP->new func ("TargetingState") -> Input -> State [bool]
+->Back in AnimBP_Player -> Event TargetingState -> Set Targeting
+
+->Open BP_Player
+->From Event Lock Camera -> Rename to "Target Enemy"
+->From end -> Get Mesh -> Get Anim Instance->TargetingState (Trues and Falses)->Get CharacterMovement -> Set Orient Rotation (False and True in that ordier)
+->Also Use Controller Desired Rotation (True and False)
+
+->LockedOn variable set to RepNotify
+:Open OnRep_LockedOn->Get Locked On -> Branch
+:Copy everything from Mesh and out and put into OnRep_LockedOn and plug in True and False from Branch 
+
+->Open F_LockOn->Delete Get Camera Before Make Vector and its Break Vector
+->GetActorLocation->Split->Plug in X and Y->From Z -> + 100 -> into Z 
+->Delete the break and make vectors from the target getactorlocation-> And plug it directly into Target. 
+->After Make Rotator -> RInterp To [DeltaTime = 0.01, Interp Speed = 8] -> Plug it into Target ->From Get Controller -> Get Control Rotation and plug it into RInterp's Current -> Delete the + -25 node
+->And do a clamp (-90, 70)
+
+*Multi-Directional Dodging*
+->In BP_Player->new fun ("F_GetRollDirection")->From the InputAction Rolling/Dodging->Cut the Branch and the Stamina check including Player Stats and paste it in the function->Output -> AnimMontage ("DodgeMontage") -> If false leave it empty.
+->Cut the rolling-NOT and CanMove-AND and the Branch before calling Server_Rolling
+:Paste it in the True
+:If False return nothing
+:If True->Get LockedOn->Branch->False (The normal roll from before) 
+:If True
+::Get rolling animations made with root motion, retarget if necessary
+::Backwards, Forward, Left and Right
+::Enable Root Motion
+::Make Montages of the animations
+->Do this to calculate the direction of the rolls
+:GetMoveForward Node -> > 0.1 -> Branch 
+:GetMoveForward -> < -0.1 -> Branch
+:GetMoveRight Node with both those as well
+:Plug in true into the first branch and its false into the next branch
+:Each branches true return into the montage and choose the right roll 
+:And if the last branch is false->return nothing
+
+->Back in Event Graph->From the Input->Call F_GetRollDirection->From Montage->F_IsValid->Branch->From True plug into Server_Rolling-> And plug in Multi_Rolling into the Server Rolling part. 
+
+
+*Knockback and Stun*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
